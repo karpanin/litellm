@@ -3773,7 +3773,14 @@ class Router:
         self, deployment: dict, kwargs: dict, function_name: str | None = None
     ) -> Deployment:
         """
-        Handle clientside credential
+        Build a per-request Deployment carrying the caller-supplied api_key/api_base,
+        with its own stable id for cooldown and logging identity.
+
+        This deployment is deliberately never registered with the router (no
+        upsert_deployment/add_deployment call): doing so used to add it to
+        self.model_list under the shared model_name, which made a request-scoped,
+        caller-supplied provider credential a permanent, load-balanced deployment
+        that every other caller of that model group could be routed onto.
         """
         model_info: Final = deployment.get("model_info", {}).copy()
         litellm_params: Final = deployment["litellm_params"].copy()
@@ -3787,13 +3794,11 @@ class Router:
         original_model_id: Final = model_info.get("id")
         model_info["id"] = _model_id
         model_info["original_model_id"] = original_model_id
-        deployment_pydantic_obj: Final = Deployment(
+        return Deployment(
             model_name=model_group,
             litellm_params=LiteLLM_Params(**dynamic_litellm_params),
             model_info=model_info,
         )
-        self.upsert_deployment(deployment=deployment_pydantic_obj)  # add new deployment to router
-        return deployment_pydantic_obj
 
     @staticmethod
     def _merge_tools_from_deployment(deployment: dict, kwargs: dict) -> None:

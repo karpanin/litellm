@@ -2099,8 +2099,12 @@ def test_handle_clientside_credential_metadata_loading(
     assert result_deployment.model_info.id != "original-id-123"
     assert result_deployment.model_info.original_model_id == "original-id-123"
 
-    # Verify the deployment was added to the router
-    assert len(router.model_list) == len(model_list) + 1
+    # The caller-supplied credential must stay scoped to this call: it must never be
+    # registered as a router deployment, or a later caller with no override of their
+    # own could be load-balanced onto it and reach the provider with this credential
+    # (see LIT-7811).
+    assert len(router.model_list) == len(model_list)
+    assert router.get_deployment(model_id=result_deployment.model_info.id) is None
 
     # Test that the function correctly uses the right metadata key
     # For acompletion, it should use "metadata"
@@ -2260,8 +2264,10 @@ def test_handle_clientside_credential_with_responses_function(model_list):
     assert result_deployment.model_info.id != "original-id-responses"
     assert result_deployment.model_info.original_model_id == "original-id-responses"
 
-    # Verify the deployment was added to the router
-    assert len(router.model_list) == len(model_list) + 1
+    # The caller-supplied credential must stay scoped to this call: it must never be
+    # registered as a router deployment (see LIT-7811).
+    assert len(router.model_list) == len(model_list)
+    assert router.get_deployment(model_id=result_deployment.model_info.id) is None
 
     print(
         "✓ Success with _ageneric_api_call_with_fallbacks function name and litellm_metadata"
