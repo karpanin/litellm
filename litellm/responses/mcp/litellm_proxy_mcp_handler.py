@@ -16,6 +16,7 @@ from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, gl
 from litellm.proxy._experimental.mcp_server.utils import (
     iter_known_server_prefixes,
     logging_safe_mcp_headers,
+    mcp_server_names,
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
@@ -909,6 +910,7 @@ class LiteLLM_Proxy_MCP_Handler:
                             else {"mcp_tool_name": tool_name}
                         ),
                         user_api_key_dict=typed_user_api_key_auth,
+                        mcp_server_names=mcp_server_names(mcp_server) if mcp_server else (),
                     )
 
                 if litellm_logging_obj:

@@ -574,6 +574,60 @@ async def test_execute_tool_calls_returns_proxy_result_without_logging(monkeypat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("skip_mcp_servers", "expected"), [(("deepwiki",), "halfway"), (("crm",), "[masked]")])
+async def test_execute_tool_calls_skips_output_guardrail_for_excluded_mcp_server(
+    monkeypatch, skip_mcp_servers, expected
+):
+    import litellm
+    from litellm.caching.caching import DualCache
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    policy = ContentFilterGuardrail(
+        guardrail_name="mcp-output-policy",
+        event_hook=GuardrailEventHooks.post_mcp_call,
+        blocked_words=[BlockedWord(keyword="halfway", action=ContentFilterAction("MASK"))],
+        keyword_redaction_tag="[masked]",
+        default_on=True,
+    )
+    policy.skip_mcp_servers = skip_mcp_servers
+    monkeypatch.setattr(litellm, "callbacks", [policy])
+    ProxyLogging._callback_capabilities_cache.clear()
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        types.SimpleNamespace(proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache())),
+    )
+    server = MCPServer(server_id="deepwiki-id", name="deepwiki", alias="deepwiki", transport="http")
+    fake_manager = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(operation=nullcontext),
+        get_registry=MagicMock(return_value={}),
+        call_tool=AsyncMock(
+            return_value=CallToolResult(content=[TextContent(type="text", text="halfway")], isError=False)
+        ),
+        get_mcp_server_from_tool_name=MagicMock(return_value=server),
+        get_mcp_server_by_name=MagicMock(return_value=server),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        fake_manager,
+    )
+    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (None, None))
+
+    tool_name = "deepwiki-read_wiki_structure"
+    results = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
+        tool_server_map={tool_name: "deepwiki"},
+        tool_calls=[{"id": "call-1", "function": {"name": tool_name, "arguments": "{}"}}],
+        user_api_key_auth=None,
+    )
+
+    assert results == [{"tool_call_id": "call-1", "result": expected, "name": tool_name}]
+
+
+@pytest.mark.asyncio
 async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypatch):
     result = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
     proxy_logging_obj = MagicMock()

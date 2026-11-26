@@ -929,6 +929,10 @@ class GuardrailEventHooks(str, Enum):
 
 GUARDRAIL_EVENT_HOOK_VALUES: Final = frozenset(member.value for member in GuardrailEventHooks)
 
+MCP_GUARDRAIL_EVENT_HOOKS: Final = frozenset(
+    (GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.during_mcp_call, GuardrailEventHooks.post_mcp_call)
+)
+
 _GUARDRAIL_STREAM_SCOPES: Final[Mapping[str, GuardrailStreamScope]] = MappingProxyType(
     {
         "streaming": "streaming",
@@ -1053,6 +1057,16 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
             "evaluation inputs (texts and structured_messages). When False, tool "
             "messages are included even if litellm_settings sets a global skip. When "
             "None, use the global litellm.skip_tool_message_in_guardrail setting."
+        ),
+    )
+
+    skip_mcp_servers: list[str] | None = Field(
+        default=None,
+        description=(
+            "MCP servers this guardrail does not run on, for its pre_mcp_call, during_mcp_call and "
+            "post_mcp_call modes. Each entry is an exact server name or a regex that must match the "
+            "whole name, like a policy's model condition. A server matches when its name, alias or "
+            "server_name does. Calls whose server cannot be resolved are never skipped."
         ),
     )
 

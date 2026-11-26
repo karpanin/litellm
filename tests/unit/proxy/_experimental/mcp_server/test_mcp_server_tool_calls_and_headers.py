@@ -12039,6 +12039,40 @@ async def test_progress_text_obeys_request_output_guardrails(monkeypatch, action
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("server_alias", "expected"), [("warehouse", "halfway"), ("crm", "[masked]")])
+async def test_progress_text_skips_output_guardrail_for_excluded_mcp_server(monkeypatch, server_alias, expected):
+    import litellm
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.operations import _guarded_progress_callback
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    policy = ContentFilterGuardrail(
+        guardrail_name="progress-policy",
+        event_hook=GuardrailEventHooks.post_mcp_call,
+        blocked_words=[BlockedWord(keyword="halfway", action=ContentFilterAction("MASK"))],
+        keyword_redaction_tag="[masked]",
+        default_on=True,
+    )
+    policy.skip_mcp_servers = ("warehouse",)
+    monkeypatch.setattr(litellm, "callbacks", [policy])
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
+    ProxyLogging._callback_capabilities_cache.clear()
+    server = MCPServer(server_id=f"{server_alias}-id", name=server_alias, alias=server_alias, transport="http")
+    delivered = AsyncMock()
+
+    callback = _guarded_progress_callback(delivered, None, UserAPIKeyAuth(user_id="progress-user"), {}, server)
+    assert callback is not None
+    await callback(0, None, "halfway")
+
+    delivered.assert_awaited_once_with(0, None, expected)
+
+
+@pytest.mark.asyncio
 async def test_progress_callback_preserves_absence_and_cancellation():
     import asyncio
 

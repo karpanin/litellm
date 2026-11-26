@@ -2054,6 +2054,7 @@ class ProxyLogging:
             # synthetic call_mcp_tool payload (otherwise a key with
             # mcp_rpm_limit could exceed it via the MCP path).
             "mcp_server_name": kwargs.get("mcp_rate_limit_server_name"),
+            "mcp_server_names": kwargs.get("mcp_server_names"),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
@@ -4319,6 +4320,7 @@ class ProxyLogging:
         response: "CallToolResult",
         request_data: Mapping[str, Any],
         user_api_key_dict: UserAPIKeyAuth | None = None,
+        mcp_server_names: tuple[str, ...] = (),
     ) -> "CallToolResult":
         """
         Run guardrails configured for ``post_mcp_call`` against an MCP tool result.
@@ -4344,7 +4346,9 @@ class ProxyLogging:
             verbose_proxy_logger.debug("MCP guardrail translation handler unavailable; skipping post_mcp_call hook")
             return response
 
-        gate_data: Final = mcp_guardrail_gate_data(request_data)
+        gate_data: Final = MappingProxyType(
+            {**mcp_guardrail_gate_data(request_data), "mcp_server_names": mcp_server_names}
+        )
         for callback in caps.resolved_callbacks:
             if not isinstance(callback, CustomGuardrail):
                 continue

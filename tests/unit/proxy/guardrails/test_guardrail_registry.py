@@ -1982,3 +1982,72 @@ async def test_rotate_guardrail_params_gives_up_on_a_row_that_keeps_changing(mon
     assert rows_updated == 0
     assert prisma_client.db.litellm_guardrailstable.update_many.await_count == GUARDRAIL_ROTATION_ATTEMPTS
     assert prisma_client.db.litellm_guardrailstable.find_unique.await_count == GUARDRAIL_ROTATION_ATTEMPTS - 1
+
+
+class TestSkipMcpServers:
+    """skip_mcp_servers keeps a default-on guardrail off for MCP calls to the listed servers only."""
+
+    @staticmethod
+    def _presidio(mode: str | list[str], skip_mcp_servers: list[str]) -> CustomGuardrail:
+        lists = _all_callback_lists()
+        snapshots = [list(cb_list) for cb_list in lists]
+        try:
+            handler = InMemoryGuardrailHandler()
+            parsed = handler.initialize_guardrail(
+                guardrail={
+                    "guardrail_name": "mcp-mask",
+                    "litellm_params": {
+                        "guardrail": "presidio",
+                        "mode": mode,
+                        "default_on": True,
+                        "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+                        "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+                        "skip_mcp_servers": skip_mcp_servers,
+                    },
+                },
+            )
+            assert parsed is not None
+            callback = handler.guardrail_id_to_custom_guardrail[parsed["guardrail_id"]]
+            assert callback is not None
+            return callback
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+    @pytest.mark.parametrize(
+        ("skip_mcp_servers", "server_names", "runs"),
+        [
+            pytest.param(["db"], ("db",), False, id="exact-name"),
+            pytest.param(["db"], ("db-prod",), True, id="pattern-must-cover-whole-name"),
+            pytest.param(["reports-.*"], ("reports-eu",), False, id="regex"),
+            pytest.param(["reports-.*"], ("crm",), True, id="regex-miss"),
+            pytest.param(["db"], ("8c1f0d3e", "db"), False, id="any-of-the-server-names"),
+            pytest.param(["c++"], ("c++",), False, id="invalid-regex-matches-literally"),
+            pytest.param(["("], ("db",), True, id="invalid-regex-never-raises"),
+            pytest.param(["db"], (), True, id="unresolved-server-is-never-skipped"),
+        ],
+    )
+    def test_post_mcp_call(self, skip_mcp_servers: list[str], server_names: tuple[str, ...], runs: bool):
+        guardrail = self._presidio("post_mcp_call", skip_mcp_servers)
+
+        assert (
+            guardrail.should_run_guardrail(
+                data={"mcp_server_names": server_names}, event_type=GuardrailEventHooks.post_mcp_call
+            )
+            is runs
+        )
+
+    @pytest.mark.parametrize("event_type", [GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call])
+    def test_every_mcp_mode_is_skipped(self, event_type: GuardrailEventHooks):
+        guardrail = self._presidio(["pre_mcp_call", "post_mcp_call"], ["db"])
+
+        assert guardrail.should_run_guardrail(data={"mcp_server_names": ("db",)}, event_type=event_type) is False
+        assert guardrail.should_run_guardrail(data={"mcp_server_names": ("crm",)}, event_type=event_type) is True
+
+    def test_non_mcp_modes_ignore_the_list(self):
+        guardrail = self._presidio(["pre_call", "post_mcp_call"], ["db"])
+
+        assert (
+            guardrail.should_run_guardrail(data={"mcp_server_names": ("db",)}, event_type=GuardrailEventHooks.pre_call)
+            is True
+        )

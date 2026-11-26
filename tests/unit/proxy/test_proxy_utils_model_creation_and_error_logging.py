@@ -2181,6 +2181,33 @@ async def test_post_mcp_call_hook_honors_opt_out_in_request_metadata(install_cal
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mcp_server_names", "expected_text"),
+    [(("db",), "jane@example.com"), (("crm",), "<MASKED>"), ((), "<MASKED>")],
+)
+async def test_post_mcp_call_hook_skips_guardrail_for_excluded_mcp_server(
+    install_callbacks, mcp_server_names, expected_text
+):
+    """A guardrail listing a server in skip_mcp_servers leaves that server's tool output alone and no other."""
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = _RecordingMCPGuardrail(event_hook=GuardrailEventHooks.post_mcp_call)
+    guardrail.skip_mcp_servers = ("db",)
+    install_callbacks(guardrail)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data=_mcp_logging_payload({}),
+        user_api_key_dict=None,
+        mcp_server_names=mcp_server_names,
+    )
+
+    assert [item.text for item in returned.content] == [expected_text]
+
+
+@pytest.mark.asyncio
 async def test_post_mcp_call_hook_runs_default_on_guardrail_when_payload_has_no_metadata_bucket(install_callbacks):
     """A logging payload carrying no metadata bucket must leave the Default On path working.
 

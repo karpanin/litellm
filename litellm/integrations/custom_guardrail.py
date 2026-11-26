@@ -3,9 +3,11 @@ import copy
 import hashlib
 import json
 import os
+import re
 import secrets
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
+from itertools import product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
@@ -24,6 +26,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DEFAULT_GUARDRAIL_STREAM_SCOPE,
+    MCP_GUARDRAIL_EVENT_HOOKS,
     DynamicGuardrailParams,
     GuardrailEventHooks,
     GuardrailStreamScope,
@@ -86,6 +89,15 @@ DEFAULT_ADVISORY_MESSAGE: Final = (
 _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.ContextVar(
     "litellm_guardrail_self_recorded", default=False
 )
+
+
+def _mcp_server_matches(pattern: str, server_name: str) -> bool:
+    if pattern == server_name:
+        return True
+    try:
+        return re.fullmatch(pattern, server_name) is not None
+    except re.error:
+        return False
 
 
 def is_guardrail_intervention(e: Exception) -> bool:
@@ -347,6 +359,7 @@ class CustomGuardrail(CustomLogger):
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
+    skip_mcp_servers: tuple[str, ...] = ()
 
     timeout: float | httpx.Timeout | None = None
 
@@ -1355,6 +1368,16 @@ class CustomGuardrail(CustomLogger):
             return is_streaming
         return not is_streaming
 
+    def _skips_mcp_server(self, data: Mapping[str, object], event_type: GuardrailEventHooks) -> bool:
+        server_names: Final = data.get("mcp_server_names")
+        if event_type not in MCP_GUARDRAIL_EVENT_HOOKS or not isinstance(server_names, tuple):
+            return False
+        candidates: Final = cast(tuple[object, ...], server_names)  # cast-ok: isinstance narrowed to a bare tuple
+        return any(
+            isinstance(server_name, str) and _mcp_server_matches(pattern, server_name)
+            for pattern, server_name in product(self.skip_mcp_servers, candidates)
+        )
+
     def should_run_guardrail(
         self,
         data,
@@ -1364,6 +1387,9 @@ class CustomGuardrail(CustomLogger):
         Returns True if the guardrail should be run on the event_type
         """
         if self._suppressed_by_auto_router_compression():
+            return False
+
+        if self._skips_mcp_server(cast(Mapping[str, object], data), event_type):  # cast-ok: data param
             return False
 
         requested_guardrails: Final = self.get_guardrail_from_metadata(data)

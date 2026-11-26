@@ -379,6 +379,10 @@ def iter_known_server_prefixes(server: _McpServerLike) -> Iterator[str]:
     yield from _emit(server_id)
 
 
+def mcp_server_names(server: MCPServer) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(name for name in (server.name, server.alias, server.server_name) if name))
+
+
 def server_answers_to(server: _McpServerLike, name: str) -> bool:
     requested: Final = name.lower()
     return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)

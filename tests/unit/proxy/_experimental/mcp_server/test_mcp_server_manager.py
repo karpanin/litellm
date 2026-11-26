@@ -20292,3 +20292,72 @@ async def test_legacy_upstream_elicitation_rejects_modern_downstream_without_con
     finally:
         active_mcp_request_ctx_var.reset(request_token)
         legacy_server.active_mcp_session_var.reset(session_token)
+
+
+class _MCPHookProbe(CustomGuardrail):
+    def __init__(self, skip_mcp_servers: tuple[str, ...]):
+        super().__init__(
+            guardrail_name="mcp-hook-probe",
+            event_hook=[GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.during_mcp_call],
+            default_on=True,
+        )
+        self.skip_mcp_servers = skip_mcp_servers
+        self.hooks_run: list[str] = []
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.hooks_run.append("pre_mcp_call")
+        return data
+
+    async def async_moderation_hook(self, data, user_api_key_dict, call_type):
+        self.hooks_run.append("during_mcp_call")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skip_mcp_servers", "hooks_run"),
+    [
+        pytest.param(("warehouse",), [], id="alias"),
+        pytest.param(("Warehouse.*",), [], id="server-name-regex"),
+        pytest.param(("crm",), ["pre_mcp_call", "during_mcp_call"], id="other-server"),
+    ],
+)
+async def test_tool_call_hooks_skip_guardrail_for_excluded_mcp_server(skip_mcp_servers, hooks_run):
+    """pre_mcp_call and during_mcp_call guardrails see which server a tool call targets, so
+    skip_mcp_servers can exclude it by any of the server's names."""
+    probe = _MCPHookProbe(skip_mcp_servers)
+    original_callbacks = list(litellm.callbacks)
+    litellm.callbacks = [probe]
+    ProxyLogging._callback_capabilities_cache.clear()
+    try:
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="warehouse-id",
+            name="Warehouse DB",
+            alias="warehouse",
+            server_name="Warehouse DB",
+            transport=MCPTransport.http,
+        )
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+        await manager.pre_call_tool_check(
+            name="query",
+            arguments={},
+            server_name="warehouse",
+            user_api_key_auth=UserAPIKeyAuth(),
+            proxy_logging_obj=proxy_logging_obj,
+            server=server,
+        )
+        await manager._create_during_hook_task(
+            name="query",
+            arguments={},
+            server_name_from_prefix="warehouse",
+            server=server,
+            user_api_key_auth=UserAPIKeyAuth(),
+            proxy_logging_obj=proxy_logging_obj,
+            start_time=datetime.now(),
+        )
+    finally:
+        litellm.callbacks = original_callbacks
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert probe.hooks_run == hooks_run

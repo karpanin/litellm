@@ -645,6 +645,7 @@ def _configure_callback_scoping(
         "scan_only_tool_results",
     ):
         setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
+    custom_guardrail_callback.skip_mcp_servers = tuple(litellm_params.skip_mcp_servers or ())
     scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
     if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
         raise ValueError(
